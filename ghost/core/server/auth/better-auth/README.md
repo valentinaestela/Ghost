@@ -76,6 +76,8 @@ until Phase 4.
   the guard's read stands. Server-only: `createVerifiedSession`,
   `revokeUserSessions`, `revokeAllSessions` and `lockAllUsers`, which no Ghost
   caller uses yet.
+- `session-controller.ts`: `POST` and `DELETE /session` under `better-auth`,
+  described below.
 - `routes.ts`: the Better Auth paths that matchers, limiters and
   `disabledPaths` refer to. A mistyped path matches nothing, silently.
 
@@ -158,6 +160,50 @@ table graduates), all of this uses `users.password` as before.
 > There's no migration path between these states. Reset the database instead
 > (`pnpm reset:db`, or `pnpm reset:data` for generated content), or reset the
 > affected users' passwords.
+
+## Running Better Auth locally
+
+The monorepo's development config already has the tables and
+`auth:betterAuthDev`, so only the engine needs switching:
+
+```bash
+auth__engine=better-auth pnpm dev:up
+```
+
+Or set `"auth": {"engine": "better-auth"}` in `ghost/config.local.json`.
+Outside the monorepo's config, also set `auth:betterAuthDev` to `true`. Legacy
+session cookies are not read, so staff sign in again once, and again after
+switching back to `legacy`. Sign-in pins each session to the admin origin, so
+sign in through the admin URL Ghost is configured with; a session used from
+another origin is refused. Development config has
+`security:staffDeviceVerification` off, so every new session is verified; with
+it on, sign-in can't complete until device verification moves (plan Phase 3).
+
+## Compatibility routes
+
+Under `better-auth`, `POST /session` (`session-controller.ts`) calls
+`signInEmail` with headers only and `returnHeaders`, and forwards the session
+cookie, with the legacy body, `201`, rate limits and `userLogin` reset on
+success. `DELETE /session` calls `signOut` and answers `204`. Server-side calls skip Better
+Auth's origin checks, so the controller keeps the legacy login-CSRF check. It
+also keeps the legacy errors, which enumerate staff (SC-90): on Better Auth's
+generic `INVALID_EMAIL_OR_PASSWORD` it looks the email up and answers as
+legacy sign-in would. The legacy `sessions` table is untouched.
+
+A `session.create.before` hook in `create-auth.ts` sets what
+`resolvePrincipal` checks on every new session:
+
+- `origin`: the request's origin, by the legacy session's rule (Origin, else
+  Referer, else the admin URL). On `POST /session` the controller has already
+  required it to be the admin origin, and native `/sign-in/email` has Better
+  Auth's origin check. A session without one resolves as anonymous.
+- `verified`: `true` while `security:staffDeviceVerification` is off, as
+  legacy does.
+
+A rotation (`/change-password` with `revokeOtherSessions`) carries `origin`
+and `verified` over from the replaced session. An `origin` passed to
+`createVerifiedSession` is kept, and the hook never sets `verified` back to
+`false`.
 
 ## Tables
 
