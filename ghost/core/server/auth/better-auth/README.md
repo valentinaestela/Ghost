@@ -74,10 +74,10 @@ until Phase 4.
   cross-origin request sends nothing. Every new session sets `last_seen` and
   moves a `warn-*` status to `active`; a lock or suspension committed after
   the guard's read stands. Server-only: `createVerifiedSession`,
-  `revokeUserSessions`, `revokeAllSessions` and `lockAllUsers`, which no Ghost
-  caller uses yet.
+  `revokeUserSessions`, `revokeAllSessions` and `lockAllUsers`.
 - `session-controller.ts`: `POST` and `DELETE /session` under `better-auth`,
   described below.
+- `staff-sessions.ts`: the security events' session changes, described below.
 - `routes.ts`: the Better Auth paths that matchers, limiters and
   `disabledPaths` refer to. A mistyped path matches nothing, silently.
 
@@ -188,7 +188,7 @@ success. `DELETE /session` calls `signOut` and answers `204`. Server-side calls 
 Auth's origin checks, so the controller keeps the legacy login-CSRF check. It
 also keeps the legacy errors, which enumerate staff (SC-90): on Better Auth's
 generic `INVALID_EMAIL_OR_PASSWORD` it looks the email up and answers as
-legacy sign-in would. The legacy `sessions` table is untouched.
+legacy sign-in would. Sign-in leaves the legacy `sessions` table alone.
 
 A `session.create.before` hook in `create-auth.ts` sets what
 `resolvePrincipal` checks on every new session:
@@ -204,6 +204,31 @@ A rotation (`/change-password` with `revokeOtherSessions`) carries `origin`
 and `verified` over from the replaced session. An `origin` passed to
 `createVerifiedSession` is kept, and the hook never sets `verified` back to
 `false`.
+
+## Revocation
+
+Under `better-auth`, security events go through `staff-sessions.ts` (plan §5.4):
+
+- A password change (`PUT /users/password`) and a password reset
+  (`PUT /authentication/password_reset`) revoke the user's sessions, then, for
+  the user's own browser, call `createVerifiedSession` with the admin origin
+  and forward its cookie. The current browser stays signed in and verified;
+  every other session ends. `PUT /authentication/password_reset` skips the
+  legacy `initSession`, and a route middleware keeps the legacy admin-origin
+  check, since the controller can't see the request.
+- Suspending or locking a user (`PUT /users/:id` with an inactive status) and
+  deleting one revoke their sessions. Deletion revokes after its transaction
+  commits, which holds the user's rows until then.
+- The authentication reset (`POST /authentication/reset`) calls
+  `revokeAllSessions` after it deletes every legacy session, as it does under
+  either engine.
+
+Revoking a user's sessions also deletes their legacy `sessions` rows, so a
+rollback to `legacy` (plan §8) can't revive a session a security event ended.
+Under `legacy` nothing here runs: a password change and a reset already delete
+the user's legacy rows, and suspension and deletion keep legacy behaviour.
+Sessions that `createVerifiedSession` creates have no IP or user agent, since
+the API controllers don't see the request.
 
 ## Tables
 
