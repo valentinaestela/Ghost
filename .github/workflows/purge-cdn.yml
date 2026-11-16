@@ -1,0 +1,68 @@
+name: Purge CDN
+
+# Moves jsDelivr's version aliases to the releases a CI run on main published,
+# so the sites loading a public app from an alias get its new patch.
+#
+# This runs after the CI run rather than as a step of its publish job, because
+# a purge only takes effect once npm lists the release, which takes minutes:
+# waiting there would hold up every run that publishes. The publish job leaves
+# a record of each release as a `cdn-release-*` artifact, and this workflow
+# acts on those records. See tools/scripts/release/purge-cdn.ts.
+on:
+  workflow_run:
+    workflows: ['CI']
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: 22.23.5
+
+jobs:
+  purge:
+    name: Purge released CDN packages
+    # Whatever the run's conclusion: a run that a later push cancelled, or that
+    # failed in another job, may already have published.
+    if: >-
+      github.repository == 'TryGhost/Ghost' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == 'TryGhost/Ghost'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read # lists and downloads the CI run's artifacts
+    steps:
+      # Most runs publish nothing, and those stop here.
+      - name: Download the releases the CI run recorded
+        id: releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN: ${{ github.event.workflow_run.id }}
+        run: |
+          artifacts=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN/artifacts?per_page=100" --paginate --jq '.artifacts[].name')
+          recorded=$(printf '%s\n' "$artifacts" | grep -c '^cdn-release-' || true)
+          echo "recorded=$recorded" >> "$GITHUB_OUTPUT"
+          echo "Run $SOURCE_RUN recorded $recorded CDN release(s)"
+
+          if [ "$recorded" != "0" ]; then
+            gh run download "$SOURCE_RUN" --repo "$GITHUB_REPOSITORY" \
+              --pattern 'cdn-release-*' --dir "$RUNNER_TEMP/cdn-releases"
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.releases.outputs.recorded != '0'
+
+      - uses: ./.github/actions/setup-node-pnpm
+        if: steps.releases.outputs.recorded != '0'
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          # The script needs Node alone.
+          install: 'false'
+          store-cache: 'false'
+
+      - name: Purge jsDelivr once npm lists each release
+        if: steps.releases.outputs.recorded != '0'
+        run: node tools/scripts/release/purge-cdn.ts purge "$RUNNER_TEMP/cdn-releases"

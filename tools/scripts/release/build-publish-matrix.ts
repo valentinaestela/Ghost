@@ -10,6 +10,7 @@
 // The URLs to purge for a CDN package come from defaults.json itself — see
 // cdnPathsFor.
 
+import { MINOR_PLACEHOLDER } from './purge-cdn.ts';
 import {
   CONTINUOUS_PACKAGES,
   readDefaults,
@@ -21,7 +22,7 @@ const DEFAULTS = await readDefaults();
 
 // defaults.json pins each app to a major.minor and interpolates it into the
 // URLs as {version}. The publish job knows the version it just released, so we
-// hand back CURRENT_MINOR for it to substitute.
+// hand back MINOR_PLACEHOLDER for purge-cdn.ts to substitute.
 const VERSION_PLACEHOLDER = '{version}';
 
 /**
@@ -36,7 +37,7 @@ const VERSION_PLACEHOLDER = '{version}';
 export function cdnPathsFor(configEntry: DefaultsEntry): string[] {
   return Object.values(configEntry)
     .filter((value) => typeof value === 'string' && value.startsWith('https://'))
-    .map((url) => url.replaceAll(VERSION_PLACEHOLDER, 'CURRENT_MINOR'));
+    .map((url) => url.replaceAll(VERSION_PLACEHOLDER, MINOR_PLACEHOLDER));
 }
 
 export interface MatrixEntry {

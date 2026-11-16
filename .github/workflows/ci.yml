@@ -2761,8 +2761,7 @@ jobs:
           # matches what we publish.
           npm pkg set version="$NEXT_VERSION"
 
-          echo "current_minor=$(echo "$NEXT_VERSION" | awk -F. '{print $1"."$2}')" >> $GITHUB_OUTPUT
-          echo "current_major=$(echo "$NEXT_VERSION" | awk -F. '{print $1}')" >> $GITHUB_OUTPUT
+          echo "version=$NEXT_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Build the package
         if: steps.compare.outputs.changed == 'true'
@@ -2784,25 +2783,29 @@ jobs:
           pnpm publish --access public --provenance --no-git-checks --tag "${{ matrix.dist_tag }}"
 
       # Ghost core serves CDN packages from jsDelivr version aliases
-      # (`~major.minor`), which only re-resolve on purge.
-      - name: Replace version placeholders in cdn-paths
+      # (`~major.minor`), which move to a new release when they are purged
+      # after npm lists it. npm takes minutes to list a release, and this job
+      # is the last one the run waits for, so the purge happens after the run,
+      # in purge-cdn.yml, from the release recorded here.
+      - name: Record the release for the CDN purge
         if: steps.compare.outputs.changed == 'true' && matrix.cdn_paths != ''
-        id: cdn_paths
+        env:
+          PACKAGE_NAME: ${{ matrix.package_name }}
+          VERSION: ${{ steps.release.outputs.version }}
+          CDN_PATHS: ${{ matrix.cdn_paths }}
         run: |
-          cdn_paths="${{ matrix.cdn_paths }}"
-          echo "cdn_paths<<EOF" >> $GITHUB_OUTPUT
-          echo "$cdn_paths" | sed -e 's/CURRENT_MINOR/${{ steps.release.outputs.current_minor }}/g' -e 's/CURRENT_MAJOR/${{ steps.release.outputs.current_major }}/g' >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          node tools/scripts/release/purge-cdn.ts record \
+            --package "$PACKAGE_NAME" --version "$VERSION" --cdn-paths "$CDN_PATHS" \
+            "$RUNNER_TEMP/cdn-release/release.json"
 
-      - name: Print cdn_paths
+      - name: Upload the release record
         if: steps.compare.outputs.changed == 'true' && matrix.cdn_paths != ''
-        run: echo "${{ steps.cdn_paths.outputs.cdn_paths }}"
-
-      - name: Purge jsDelivr cache
-        if: steps.compare.outputs.changed == 'true' && matrix.cdn_paths != ''
-        uses: gacts/purge-jsdelivr-cache@8d92aea944f1a3e8ad70505379e1a8ac72d56b73 # v1.1.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          url: ${{ steps.cdn_paths.outputs.cdn_paths }}
+          name: cdn-release-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/cdn-release/release.json
+          if-no-files-found: error
+          retention-days: 1
 
   # --------------------------------------------------------------------------- #
   # Trigger Pro CD — dispatch to Ghost-Moya cd.yml (runs on main + PRs)
