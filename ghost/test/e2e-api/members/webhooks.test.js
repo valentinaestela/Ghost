@@ -14,6 +14,7 @@ const {
 } = require('../../utils/e2e-framework');
 const moment = require('moment');
 const models = require('../../../core/server/models');
+const settingsCache = require('../../../core/shared/settings-cache');
 const db = require('../../../core/server/data/db');
 const modelEvents = require('../../../core/server/lib/common/events');
 const cleanExpiredComped =
@@ -312,7 +313,7 @@ describe('Members API', function () {
           .expectStatus(200);
 
         assert.deepEqual(spansOf(metrics, 'stripe.webhook'), [
-          { outcome: 'success', type: 'customer.subscription.updated', ignored: true },
+          { outcome: 'success', type: 'customer.subscription.updated', ignored: 'listed_customer' },
         ]);
       } finally {
         stripeService.webhookController.configure({});
@@ -1561,6 +1562,177 @@ describe('Members API', function () {
         0,
         'The member should not have any newsletter subscription',
       );
+    });
+
+    /**
+     * Sends a completed subscription checkout for a new customer of its own, keyed by `key`, and
+     * returns the response status.
+     */
+    async function completeCheckout({
+      key,
+      email,
+      customerName = 'Checkout Buyer',
+      metadata = {},
+    }) {
+      set(subscription, {
+        id: `sub_${key}`,
+        customer: `cus_${key}`,
+        status: 'active',
+        items: {
+          type: 'list',
+          data: [
+            {
+              id: `item_${key}`,
+              price: {
+                id: 'price_123',
+                product: 'product_123',
+                active: true,
+                nickname: 'Monthly',
+                currency: 'usd',
+                recurring: { interval: 'month' },
+                unit_amount: 500,
+                type: 'recurring',
+              },
+            },
+          ],
+        },
+        start_date: beforeNow / 1000,
+        current_period_end: Math.floor(beforeNow / 1000) + 60 * 60 * 24 * 31,
+        cancel_at_period_end: false,
+      });
+      set(customer, {
+        id: `cus_${key}`,
+        name: customerName,
+        email,
+        subscriptions: { type: 'list', data: [subscription] },
+      });
+
+      const webhookPayload = JSON.stringify({
+        type: 'checkout.session.completed',
+        data: {
+          object: {
+            mode: 'subscription',
+            customer: customer.id,
+            subscription: subscription.id,
+            metadata,
+          },
+        },
+      });
+      const { statusCode } = await membersAgent
+        .post('/webhooks/stripe/')
+        .body(webhookPayload)
+        .header('content-type', 'application/json')
+        .header(
+          'stripe-signature',
+          stripe.webhooks.generateTestHeaderString({
+            payload: webhookPayload,
+            secret: process.env.WEBHOOK_SECRET,
+          }),
+        );
+      return statusCode;
+    }
+
+    it('Ignores a checkout, a subscription and its invoice that another site connected to the same Stripe account created', async function () {
+      // Every site connected to a Stripe account is sent each event on the account, and each site
+      // stamps the checkouts and subscriptions it creates.
+      const metrics = mockManager.mockMetrics();
+      const email = 'checkout-another-site-stamped@email.com';
+      const anotherSite = { ghost_site_uuid: crypto.randomUUID() };
+
+      const status = await completeCheckout({
+        key: 'another_site_stamped',
+        email,
+        metadata: anotherSite,
+      });
+
+      assert.equal(status, 200, 'Stripe should be told the event was handled');
+      const { body } = await adminAgent.get(`/members/?search=${email}`);
+      assert.equal(body.members.length, 0, 'No member should be created for another site’s buyer');
+
+      // An invoice carries its subscription's metadata on the subscription's line.
+      for (const [type, object] of [
+        ['customer.subscription.updated', { ...subscription, metadata: anotherSite }],
+        [
+          'invoice.payment_succeeded',
+          {
+            object: 'invoice',
+            customer: subscription.customer,
+            subscription: subscription.id,
+            metadata: {},
+            lines: { data: [{ type: 'subscription', metadata: anotherSite }] },
+          },
+        ],
+      ]) {
+        const payload = JSON.stringify({ type, data: { object } });
+        await membersAgent
+          .post('/webhooks/stripe/')
+          .body(payload)
+          .header('content-type', 'application/json')
+          .header(
+            'stripe-signature',
+            stripe.webhooks.generateTestHeaderString({
+              payload,
+              secret: process.env.WEBHOOK_SECRET,
+            }),
+          )
+          .expectStatus(200);
+      }
+
+      assert.deepEqual(spansOf(metrics, 'stripe.webhook'), [
+        { outcome: 'success', type: 'checkout.session.completed', ignored: 'another_site' },
+        { outcome: 'success', type: 'customer.subscription.updated', ignored: 'another_site' },
+        { outcome: 'success', type: 'invoice.payment_succeeded', ignored: 'another_site' },
+      ]);
+    });
+
+    it('Creates the member for a checkout this site stamped', async function () {
+      const email = 'checkout-this-site-stamped@email.com';
+
+      const status = await completeCheckout({
+        key: 'this_site_stamped',
+        email,
+        metadata: { ghost_site_uuid: settingsCache.get('site_uuid') },
+      });
+
+      assert.equal(status, 200);
+      const { body } = await adminAgent.get(`/members/?search=${email}`);
+      assert.equal(body.members.length, 1, 'The member was not created');
+      assert.equal(body.members[0].status, 'paid', 'The member should be "paid"');
+    });
+
+    it('Ignores an unstamped checkout that names a newsletter this site doesn’t have', async function () {
+      // A checkout another site created before sites stamped them, or on an older version of
+      // Ghost, names that site's newsletters, which this site doesn't have.
+      const email = 'checkout-another-site@email.com';
+
+      const status = await completeCheckout({
+        key: 'another_site',
+        email,
+        metadata: { newsletters: JSON.stringify([{ id: crypto.randomBytes(12).toString('hex') }]) },
+      });
+
+      assert.equal(status, 200, 'Stripe should be told the event was handled');
+      const { body } = await adminAgent.get(`/members/?search=${email}`);
+      assert.equal(body.members.length, 0, 'No member should be created for another site’s buyer');
+    });
+
+    it('Creates the member when the checkout names a newsletter the site has archived since', async function () {
+      const email = 'checkout-archived-newsletter@email.com';
+      const archived = await models.Newsletter.add({
+        name: 'Archived after the checkout started',
+        status: 'archived',
+      });
+
+      const status = await completeCheckout({
+        key: 'archived_newsletter',
+        email,
+        metadata: { newsletters: JSON.stringify([{ id: archived.id }]) },
+      });
+
+      assert.equal(status, 200);
+      const { body } = await adminAgent.get(`/members/?search=${email}`);
+      assert.equal(body.members.length, 1, 'The member was not created');
+      assert.equal(body.members[0].status, 'paid', 'The member should be "paid"');
     });
 
     it('Does not 500 if the member is unknown', async function () {

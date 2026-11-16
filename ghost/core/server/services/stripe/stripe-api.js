@@ -158,11 +158,21 @@ module.exports = class StripeAPI {
   static API_VERSION = STRIPE_API_VERSION;
 
   /**
+   * The metadata key under which each Checkout session Ghost creates, and the subscription a
+   * subscription checkout creates, carries the uuid of the site that created it. Stripe sends
+   * every site connected to the same Stripe account each event on the account, so the key tells
+   * a site's webhook which checkouts and subscriptions are its own.
+   */
+  static SITE_METADATA_KEY = 'ghost_site_uuid';
+
+  /**
    * StripeAPI
    * @param {object} deps
    * @param {object} deps.labs
    * @param {(key: string) => boolean} deps.labs.isSet
    * @param {StripeTracking} deps.tracking
+   * @param {() => string | undefined} [deps.getSiteUuid] The uuid each session is stamped with
+   *   (see `SITE_METADATA_KEY`). Without it, sessions aren't stamped.
    */
   constructor(deps) {
     /** @type {Stripe} */
@@ -170,6 +180,35 @@ module.exports = class StripeAPI {
     this._configured = false;
     this.labs = deps.labs;
     this.tracking = deps.tracking;
+    this.getSiteUuid = deps.getSiteUuid;
+  }
+
+  /**
+   * The session's params with this site's uuid in the session's metadata and, for a subscription
+   * checkout, in the subscription's, so this site's webhook can tell them from another site's
+   * (see `SITE_METADATA_KEY`). Set last, so no metadata a caller passes can replace it.
+   *
+   * @private
+   * @template {{metadata?: object, subscription_data?: {metadata?: object}}} Params
+   * @param {Params} params
+   * @returns {Params}
+   */
+  _stamped(params) {
+    const siteUuid = this.getSiteUuid?.();
+    if (!siteUuid) {
+      return params;
+    }
+    const stamp = { [StripeAPI.SITE_METADATA_KEY]: siteUuid };
+    return {
+      ...params,
+      metadata: { ...params.metadata, ...stamp },
+      ...(params.subscription_data && {
+        subscription_data: {
+          ...params.subscription_data,
+          metadata: { ...params.subscription_data.metadata, ...stamp },
+        },
+      }),
+    };
   }
 
   /**
@@ -218,7 +257,7 @@ module.exports = class StripeAPI {
   async _createWithFallback(params, requestOptions, parts, onRefused) {
     try {
       return await this._stripe.checkout.sessions.create(
-        sessionCreateParams(params, parts),
+        this._stamped(sessionCreateParams(params, parts)),
         requestOptions,
       );
     } catch (err) {

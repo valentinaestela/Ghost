@@ -3,6 +3,45 @@ const logging = require('@tryghost/logging');
 const StripeAPI = require('./stripe-api');
 
 /**
+ * @param {unknown} value
+ * @returns {unknown}
+ */
+const stampIn = (value) =>
+  value &&
+  typeof value === 'object' &&
+  'metadata' in value &&
+  value.metadata &&
+  typeof value.metadata === 'object'
+    ? value.metadata[StripeAPI.SITE_METADATA_KEY]
+    : undefined;
+
+/**
+ * The site stamp an event's object carries (see `StripeAPI.SITE_METADATA_KEY`): in its own
+ * metadata for a checkout or subscription, or, for an invoice, in its subscription line's, as
+ * Stripe gives a subscription line its subscription's metadata.
+ *
+ * @param {unknown} object
+ * @returns {unknown}
+ */
+function siteStampOf(object) {
+  const own = stampIn(object);
+  if (own !== undefined || !object || typeof object !== 'object' || !('lines' in object)) {
+    return own;
+  }
+  const lines =
+    object.lines && typeof object.lines === 'object' && 'data' in object.lines
+      ? object.lines.data
+      : [];
+  const subscriptionLine = Array.isArray(lines)
+    ? lines.find(
+        (line) =>
+          line && typeof line === 'object' && 'type' in line && line.type === 'subscription',
+      )
+    : undefined;
+  return stampIn(subscriptionLine);
+}
+
+/**
  * The classes of Stripe's errors for a key that no longer works on the publisher's Stripe
  * account: expired or revoked (`StripeAuthenticationError`), or stripped of the permissions Ghost
  * needs (`StripePermissionError`). Stripe's client puts the class's name in an error's `type`.
@@ -27,10 +66,13 @@ module.exports = class WebhookController {
    * @param {import('./services/webhook/subscription-event-service')} deps.subscriptionEventService
    * @param {import('./services/webhook/invoice-event-service')} deps.invoiceEventService
    * @param {import('./services/webhook/charge-refunded-event-service')} deps.chargeRefundedEventService
+   * @param {() => string | undefined} deps.getSiteUuid The uuid of this site, which Ghost stamps on
+   *   each checkout and subscription it creates (see `StripeAPI.SITE_METADATA_KEY`).
    * @param {Pick<import('./tracking').StripeTracking, 'webhook'>} deps.tracking
    * @param {{captureException(err: unknown): unknown}} deps.sentry
    */
   constructor(deps) {
+    this.getSiteUuid = deps.getSiteUuid;
     this.tracking = deps.tracking;
     this.sentry = deps.sentry;
     this.checkoutSessionEventService = deps.checkoutSessionEventService;
@@ -73,6 +115,24 @@ module.exports = class WebhookController {
     }
 
     return null;
+  }
+
+  /**
+   * Whether the event is about a checkout or subscription another site created, or an invoice for
+   * one of its subscriptions. Stripe sends every site connected to the same Stripe account each
+   * event on the account, and Ghost stamps each checkout and subscription it creates with its
+   * site's uuid. Handling another site's would make its buyer a member here, or fail on every try
+   * and leave Stripe telling the publisher the webhook is failing, while that site handles the
+   * event itself. An unstamped object, created before Ghost stamped them or outside Ghost, such as
+   * through a Stripe payment link, isn't another site's as far as Ghost can tell.
+   *
+   * @param {import('stripe').Stripe.Event} event
+   * @returns {boolean}
+   */
+  createdByAnotherSite(event) {
+    const siteUuid = this.getSiteUuid();
+    const stamp = siteStampOf(event.data?.object);
+    return Boolean(siteUuid) && typeof stamp === 'string' && stamp !== siteUuid;
   }
 
   /**
@@ -131,9 +191,22 @@ module.exports = class WebhookController {
           );
         }
 
+        if (this.createdByAnotherSite(event)) {
+          attempt.ignoring('another_site');
+          logging.info(
+            {
+              event: { name: 'stripe.webhook.another_site' },
+              stripe_event_type: event.type,
+              stripe_event_id: event.id,
+            },
+            'Ignored a Stripe webhook about a checkout or subscription another site created',
+          );
+          return;
+        }
+
         const customerId = this.getEventCustomerId(event);
         if (this.shouldIgnoreEvent(event, customerId)) {
-          attempt.ignoring();
+          attempt.ignoring('listed_customer');
           logging.info(
             {
               event: { name: 'stripe.webhook.ignored' },

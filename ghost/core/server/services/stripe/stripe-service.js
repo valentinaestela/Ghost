@@ -10,6 +10,7 @@ const CheckoutSessionEventService = require('./services/webhook/checkout-session
 const ChargeRefundedEventService = require('./services/webhook/charge-refunded-event-service');
 const memberWelcomeEmails = require('../member-welcome-emails').default;
 const metafields = require('../members-metafields');
+const newsletters = require('../newsletters').default;
 
 /**
  * @typedef {object} IStripeServiceConfig
@@ -65,7 +66,8 @@ module.exports = class StripeService {
     settingsCache,
     models,
   }) {
-    const api = new StripeAPI({ labs, tracking });
+    const getSiteUuid = () => settingsCache.get('site_uuid');
+    const api = new StripeAPI({ labs, tracking, getSiteUuid });
 
     const webhookManager = new WebhookManager({
       StripeWebhook,
@@ -142,6 +144,9 @@ module.exports = class StripeService {
       get memberBREADService() {
         return membersService.api.memberBREADService;
       },
+      get newslettersService() {
+        return newsletters.service;
+      },
     });
 
     const chargeRefundedEventService = new ChargeRefundedEventService({
@@ -151,6 +156,7 @@ module.exports = class StripeService {
     });
 
     const webhookController = new WebhookController({
+      getSiteUuid,
       webhookManager,
       subscriptionEventService,
       invoiceEventService,

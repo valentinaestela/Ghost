@@ -11,6 +11,32 @@ const { COLLECTION_FLAG } = require('../../../stripe-checkout-config/models');
 /** @typedef {import('../../../../lib/member-signup-contexts').SignupContext} SignupContext */
 /** @typedef {import('../../tracking').CheckoutCompletionAttempt} CheckoutCompletionAttempt */
 
+/**
+ * The ids of the newsletters a checkout's metadata names, each once. Unreadable metadata names
+ * none: completing the checkout logs it and signs the buyer up to the defaults.
+ *
+ * @param {import('stripe').Stripe.Checkout.Session} session
+ * @returns {string[]}
+ */
+function newsletterIdsOf(session) {
+  let newsletters;
+  try {
+    newsletters = JSON.parse(session.metadata?.newsletters ?? '[]');
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(newsletters)) {
+    return [];
+  }
+  const ids = newsletters
+    .map((newsletter) => newsletter?.id)
+    .filter((id) => typeof id === 'string');
+  return [...new Set(ids)];
+}
+
+/** An object id, as Ghost gives every record: 24 hexadecimal characters. */
+const OBJECT_ID = /^[0-9a-f]{24}$/;
+
 function isStripeMetadataTrue(value) {
   return value === true || value === 'true';
 }
@@ -129,6 +155,7 @@ module.exports = class CheckoutSessionEventService {
    * @param {object} deps.staffServiceEmails
    * @param {function} deps.sendSignupEmail
    * @param {function} deps.isPaidWelcomeEmailActive
+   * @param {{getAll(options: {filter: string, columns: string[]}): Promise<{id: string}[]>}} deps.newslettersService
    * @param {{isSet(flag: string): boolean}} deps.labs
    * @param {Pick<import('../../../members-metafields/bindings-service').MetafieldBindingsService, 'planThrough'>} deps.metafieldBindings
    * @param {{updateWithMetafields: (data: object, options: {id: string}, plans: import('../../../members-metafields/values-service').MetafieldPlan[]) => Promise<unknown>}} deps.memberBREADService
@@ -163,6 +190,16 @@ module.exports = class CheckoutSessionEventService {
       }
 
       if (session.mode === 'subscription') {
+        if (await this.namesAnotherSitesNewsletters(session)) {
+          logging.info(
+            {
+              event: { name: 'stripe_checkout.complete.another_site' },
+              session_id: session.id,
+            },
+            'Ignored a completed checkout that another site connected to the same Stripe account created',
+          );
+          return;
+        }
         attempt.completing('subscription');
         await this.handleSubscriptionEvent(session, attempt);
       }
@@ -171,6 +208,35 @@ module.exports = class CheckoutSessionEventService {
         await this.handlePaymentEvent(session, attempt);
       }
     });
+  }
+
+  /**
+   * Whether the checkout names a newsletter this site doesn't have, which only a checkout another
+   * site created can do. Stripe sends every site connected to the same Stripe account each
+   * checkout the account completes. The webhook already ignores a checkout another site stamped
+   * (see `StripeAPI.SITE_METADATA_KEY`); this catches another site's unstamped ones, created before
+   * Ghost stamped checkouts or by a site on an older version of Ghost. A checkout Ghost creates
+   * only names newsletters its site has, archived or not, and Ghost never deletes a newsletter, so
+   * completing such a checkout here would fail on every try.
+   *
+   * @param {import('stripe').Stripe.Checkout.Session} session
+   * @returns {Promise<boolean>}
+   */
+  async namesAnotherSitesNewsletters(session) {
+    const ids = newsletterIdsOf(session);
+    if (ids.length === 0) {
+      return false;
+    }
+    // Ghost's ids are object ids, so any other id isn't one of this site's newsletters, and only
+    // an object id reaches the NQL filter, where it can't end the list it's quoted in.
+    if (!ids.every((id) => OBJECT_ID.test(id))) {
+      return true;
+    }
+    const found = await this.deps.newslettersService.getAll({
+      filter: `id:[${ids.map((id) => `'${id}'`)}]`,
+      columns: ['id'],
+    });
+    return found.length < ids.length;
   }
 
   /**
