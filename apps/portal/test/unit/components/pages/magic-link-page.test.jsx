@@ -101,6 +101,25 @@ describe('MagicLinkPage', () => {
       expect(queryByText('Gift value')).not.toBeInTheDocument();
       expect(queryByText('$50')).not.toBeInTheDocument();
     });
+
+    test('tells the visitor the link finishes the redemption when the tier has no requirements', () => {
+      const { getByText } = setupTest({ lastPage: 'gift', pageData: giftPageData });
+
+      expect(
+        getByText(/Click the confirmation link in your inbox to finish redeeming your membership/),
+      ).toBeInTheDocument();
+    });
+
+    test('tells the visitor the link returns them to the gift when the tier has requirements', () => {
+      const { getByText } = setupTest({
+        lastPage: 'gift',
+        pageData: { ...giftPageData, redeemsOnceSignedIn: true },
+      });
+
+      expect(
+        getByText(/you'll come back here to finish redeeming your membership/),
+      ).toBeInTheDocument();
+    });
   });
 
   describe('OTC form conditional rendering', () => {

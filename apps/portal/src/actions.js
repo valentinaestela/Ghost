@@ -14,7 +14,7 @@ import {
   getRefDomain,
 } from './utils/helpers';
 import { refusedInput } from './utils/custom-fields';
-import { refusedAnswer } from './utils/tier-requirements';
+import { refusedAnswer, requirementInputs } from './utils/tier-requirements';
 import { t } from './utils/i18n';
 import { clearGiftFormState } from './components/pages/gift/form-state';
 import { restoreGiftEntryRoute } from './components/pages/gift/navigation';
@@ -311,10 +311,43 @@ async function signup({ data, state, api }) {
   }
 }
 
+/** The gift's redemption URL, which the magic link redirects to after signing the visitor in. */
+function giftRedemptionUrl({ site, giftToken }) {
+  const url = new URL(site?.url || window.location.href);
+  url.search = '';
+  url.hash = `#/portal/gift/redeem/${encodeURIComponent(giftToken)}`;
+  return url.href;
+}
+
+/**
+ * Builds the magic link request for a visitor who redeems a gift without being signed in.
+ *
+ * If the gift's tier has requirements that this Portal build has inputs for, such as a shipping
+ * address, the link must not redeem the gift, because the visitor hasn't entered them yet. Portal
+ * sends `giftToRedeem`, the link signs the visitor in (creating the member if they are new) and
+ * redirects back to the gift, and the visitor fills in the inputs and redeems.
+ *
+ * If the tier has no such requirements, Portal sends `giftToken` and the link redeems the gift
+ * when it signs the visitor in.
+ */
+function giftSignInLink({ site, gift, giftToken }) {
+  if (requirementInputs(gift?.tier?.requirements ?? []).length > 0) {
+    return {
+      redeemsOnceSignedIn: true,
+      redirect: giftRedemptionUrl({ site, giftToken }),
+      giftToRedeem: giftToken,
+    };
+  }
+  const redirectUrl = new URL(site?.url || window.location.href);
+  redirectUrl.search = new URLSearchParams({ giftRedemption: 'true' }).toString();
+  redirectUrl.hash = '';
+  return { redeemsOnceSignedIn: false, redirect: redirectUrl.href, giftToken };
+}
+
 /**
  * Redeems a gift. A signed-in member redeems it directly, sending the values they entered for the
- * tier's requirements as `answers`. A visitor who isn't signed in is emailed a magic link, which
- * redeems the gift when it signs them in.
+ * tier's requirements as `answers`. A visitor who isn't signed in is emailed a magic link first
+ * (see `giftSignInLink`).
  */
 async function redeemGift({ data, state, api }) {
   // `asked` is the list of requirement inputs shown on the page. It's used to show a validation
@@ -353,19 +386,18 @@ async function redeemGift({ data, state, api }) {
     }
 
     const integrityToken = await api.member.getIntegrityToken();
-    const redirectUrl = new URL(state?.site?.url || window.location.href);
-    redirectUrl.search = new URLSearchParams({
-      giftRedemption: 'true',
-    }).toString();
-    redirectUrl.hash = '';
+    const { redeemsOnceSignedIn, ...link } = giftSignInLink({
+      site: state?.site,
+      gift: state?.pageData?.gift,
+      giftToken,
+    });
 
     const { otc_ref: otcRef, inboxLinks } = await api.member.sendMagicLink({
       email: (email || '').trim(),
       emailType: 'subscribe',
       integrityToken,
       includeOTC: true,
-      redirect: redirectUrl.href,
-      giftToken,
+      ...link,
       ...(name ? { name } : {}),
     });
 
@@ -378,7 +410,9 @@ async function redeemGift({ data, state, api }) {
         ...(state.pageData || {}),
         email: (email || '').trim(),
         ...(name ? { name } : {}),
-        redirect: redirectUrl.href,
+        redirect: link.redirect,
+        // The magic link page uses this to choose its message.
+        redeemsOnceSignedIn,
       },
     };
   } catch (e) {

@@ -397,6 +397,7 @@ function setupGhostApi({ siteUrl = window.location.origin, apiUrl, apiKey }) {
       customUrlHistory,
       token,
       giftToken,
+      giftToRedeem,
       autoRedirect = true,
       includeOTC,
     }) {
@@ -414,7 +415,11 @@ function setupGhostApi({ siteUrl = window.location.origin, apiUrl, apiKey }) {
         // we don't actually use a phone #, this is from a hidden field to prevent bot activity
         honeypot: phonenumber,
         token,
+        // Portal sends one of these. With `giftToken` the magic link redeems the gift when it signs
+        // the visitor in. With `giftToRedeem` the link only signs them in, and they redeem the gift
+        // afterwards.
         giftToken,
+        giftToRedeem,
         autoRedirect,
         includeOTC,
       };

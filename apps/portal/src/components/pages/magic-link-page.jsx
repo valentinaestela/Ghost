@@ -115,6 +115,10 @@ export default class MagicLinkPage extends React.Component {
       gift: t(
         "Click the confirmation link in your inbox to finish redeeming your membership. If it doesn't arrive within 3 minutes, check your spam folder.",
       ),
+      // Shown when the link signs the visitor in and returns them to the gift without redeeming it.
+      giftOnceSignedIn: t(
+        "Click the confirmation link in your inbox, and you'll come back here to finish redeeming your membership. If it doesn't arrive within 3 minutes, check your spam folder.",
+      ),
     };
   }
 
@@ -124,9 +128,10 @@ export default class MagicLinkPage extends React.Component {
    * @param {string} params.lastPage - The previous page ('signin', 'signup', or 'gift')
    * @param {boolean} params.otcRef - Whether one-time code is being used
    * @param {string} params.submittedEmailOrInbox - The email address or 'your inbox' fallback
+   * @param {boolean} [params.redeemsOnceSignedIn] - True when a gift's magic link signs the visitor in without redeeming the gift
    * @returns {string} The translated description
    */
-  getTranslatedDescription({ lastPage, otcRef, submittedEmailOrInbox }) {
+  getTranslatedDescription({ lastPage, otcRef, submittedEmailOrInbox, redeemsOnceSignedIn }) {
     const descriptionConfig = this.getDescriptionConfig(submittedEmailOrInbox);
     const allowedPages = ['signup', 'signin', 'gift'];
     const normalizedPage = allowedPages.includes(lastPage) ? lastPage : 'signin';
@@ -136,7 +141,7 @@ export default class MagicLinkPage extends React.Component {
     }
 
     if (normalizedPage === 'gift') {
-      return descriptionConfig.gift;
+      return redeemsOnceSignedIn ? descriptionConfig.giftOnceSignedIn : descriptionConfig.gift;
     }
 
     return otcRef ? descriptionConfig.signin.withOTC : descriptionConfig.signin.withoutOTC;
@@ -328,6 +333,7 @@ export default class MagicLinkPage extends React.Component {
       lastPage: 'gift',
       otcRef,
       submittedEmailOrInbox,
+      redeemsOnceSignedIn: Boolean(pageData?.redeemsOnceSignedIn),
     });
     const benefits = gift.tier?.benefits || [];
     const tierDescription = gift.tier?.description || '';

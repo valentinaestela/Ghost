@@ -121,6 +121,27 @@ describe.each([
     expect(getByText('Enter the phone number with its country code.')).toBeInTheDocument();
   });
 
+  // The requirement inputs are only shown to a signed-in member. An anonymous visitor signs in
+  // through the emailed link first, which redirects back to this page.
+  test('shows an anonymous visitor the name and email form without the requirement inputs', async () => {
+    const { getByLabelText, queryByLabelText, getByRole, mockDoActionFn } =
+      renderGiftRedemptionPage(Page, { pageData: requiring(SHIPPING_AND_PHONE) });
+
+    expect(queryByLabelText('Recipient name')).not.toBeInTheDocument();
+    expect(queryByLabelText('Phone number')).not.toBeInTheDocument();
+
+    fireEvent.change(getByLabelText(/your email/i), { target: { value: 'jamie@example.com' } });
+    fireEvent.click(getByRole('button', { name: buttonLabel }));
+
+    await waitFor(() => {
+      expect(mockDoActionFn).toHaveBeenCalledWith('redeemGift', {
+        email: 'jamie@example.com',
+        name: '',
+        giftToken: 'gift-token-123',
+      });
+    });
+  });
+
   test('shows validation errors for anonymous visitors and only submits once valid', async () => {
     const { getByLabelText, getByRole, mockDoActionFn, getByText } = renderGiftRedemptionPage(Page);
     const emailInput = getByLabelText(/your email/i);

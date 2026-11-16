@@ -716,7 +716,8 @@ describe('redeemGift action', () => {
     expect(window.location.hash).toBe('');
   });
 
-  test('sends a subscribe magic link with the gift token and redirects back to Portal account', async () => {
+  // The tier has no requirements, so the visitor has nothing to fill in after signing in.
+  test('sends `giftToken`, so the magic link redeems the gift, when the tier has no requirements', async () => {
     const mockApi = {
       member: {
         getIntegrityToken: vi.fn(() => Promise.resolve('token-123')),
@@ -771,6 +772,75 @@ describe('redeemGift action', () => {
         email: 'jamie@example.com',
         name: 'Jamie Larson',
         redirect: expectedRedirect,
+        redeemsOnceSignedIn: false,
+      },
+    });
+  });
+
+  // The requirement inputs are only shown to a signed-in member, so the link signs the visitor in
+  // and redirects back to the gift instead of redeeming it.
+  test('sends `giftToRedeem`, so the magic link only signs the visitor in, when the tier has requirements', async () => {
+    const mockApi = {
+      member: {
+        getIntegrityToken: vi.fn(() => Promise.resolve('token-123')),
+        sendMagicLink: vi.fn(() => Promise.resolve({ otc_ref: 'otc-ref-123' })),
+      },
+    };
+    const state = {
+      site: {
+        url: 'https://example.com/',
+      },
+      pageData: {
+        token: 'gift-token-123',
+        gift: {
+          cadence: 'month',
+          duration: 3,
+          tier: {
+            name: 'Ultra',
+            requirements: [
+              {
+                name: 'phone',
+                ports: { number: { port: 'checkout.phone', field: 'custom.contact_phone' } },
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    const result = await ActionHandler({
+      action: 'redeemGift',
+      data: {
+        email: 'jamie@example.com',
+        name: '  Jamie Larson  ',
+        giftToken: 'gift-token-123',
+      },
+      state,
+      api: mockApi,
+    });
+
+    const expectedRedirect = 'https://example.com/#/portal/gift/redeem/gift-token-123';
+
+    expect(mockApi.member.sendMagicLink).toHaveBeenCalledWith({
+      email: 'jamie@example.com',
+      emailType: 'subscribe',
+      integrityToken: 'token-123',
+      includeOTC: true,
+      redirect: expectedRedirect,
+      giftToRedeem: 'gift-token-123',
+      name: 'Jamie Larson',
+    });
+
+    expect(result).toMatchObject({
+      page: 'magiclink',
+      lastPage: 'gift',
+      otcRef: 'otc-ref-123',
+      pageData: {
+        token: 'gift-token-123',
+        email: 'jamie@example.com',
+        name: 'Jamie Larson',
+        redirect: expectedRedirect,
+        redeemsOnceSignedIn: true,
       },
     });
   });
