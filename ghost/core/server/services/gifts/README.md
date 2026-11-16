@@ -17,6 +17,11 @@ transactions, or Stripe objects.
   requirements, such as a shipping address. `redeem` accepts `answers`, the
   redeemer's values for those requirements. It validates them before redeeming
   the gift, and saves them in the redemption's transaction.
+  A visitor who isn't signed in is emailed a magic link. If the gift's tier has
+  requirements, Portal sends the gift token as `giftToRedeem`: the link signs
+  the visitor in, creating the member if they are new, and redirects back to
+  the gift, where they enter the values and redeem. Otherwise Portal sends
+  `giftToken`, and the link redeems the gift when it signs the visitor in.
 - `completePurchase(input)` and `handlePaymentRefund(input)` accept normalized
   payment outcomes.
 - `handlePaidSubscriptionActivation(memberId)` consumes gift time when a paid

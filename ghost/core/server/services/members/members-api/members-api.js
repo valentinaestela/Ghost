@@ -297,6 +297,7 @@ module.exports = function MembersAPI({
       reqIp,
       type,
       giftToken,
+      giftToRedeem,
     } = await getTokenDataFromMagicLinkToken(token, otcVerification);
     if (!email) {
       return null;
@@ -314,6 +315,9 @@ module.exports = function MembersAPI({
         return getMemberIdentityData(email);
       }
 
+      // `giftToken` means the magic link redeems the gift when it signs the member in. With
+      // `giftToRedeem` the member redeems the gift themselves after signing in, so nothing is
+      // redeemed here.
       if (giftToken) {
         await giftService.service.redeem({
           token: giftToken,
@@ -367,6 +371,8 @@ module.exports = function MembersAPI({
         newsletters,
         attribution,
         geolocation,
+        // The member signed up to redeem a gift, which they do after signing in.
+        ...(giftToRedeem ? { redeemingGift: true } : {}),
       });
     }
 

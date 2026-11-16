@@ -955,7 +955,13 @@ module.exports = class RouterController {
     let { emailType } = req.body;
 
     const referrer = extractRefererOrRedirect(req);
+    // Portal sends the gift token in one of two fields:
+    // - `giftToken`: the magic link redeems the gift when it signs the visitor in.
+    // - `giftToRedeem`: the magic link only signs the visitor in. Portal uses this when the gift's
+    //   tier has requirements, such as a shipping address, because the visitor has to enter them
+    //   on the gift page before redeeming.
     const giftToken = extractGiftToken(req.body.giftToken);
+    const giftToRedeem = extractGiftToken(req.body.giftToRedeem);
 
     if (!email) {
       throw new errors.BadRequestError({
@@ -1001,7 +1007,7 @@ module.exports = class RouterController {
       const resBody = {};
 
       if (emailType === 'signup' || emailType === 'subscribe') {
-        await this._handleSignup(req, normalizedEmail, referrer, giftToken);
+        await this._handleSignup(req, normalizedEmail, referrer, giftToken, giftToRedeem);
       } else {
         const signIn = await this._handleSignin(req, normalizedEmail, referrer, giftToken);
         if (signIn.otcRef) {
@@ -1110,7 +1116,13 @@ module.exports = class RouterController {
     return `${timestamp}:${hash}`;
   }
 
-  async _handleSignup(req, normalizedEmail, referrer = null, giftToken = null) {
+  async _handleSignup(
+    req,
+    normalizedEmail,
+    referrer = null,
+    giftToken = null,
+    giftToRedeem = null,
+  ) {
     if (!this._allowSelfSignup()) {
       if (this._settingsCache.get('members_signup_access') === 'paid') {
         throw new errors.BadRequestError({
@@ -1133,6 +1145,12 @@ module.exports = class RouterController {
 
     const { emailType } = req.body;
 
+    if (giftToRedeem) {
+      // Check that the gift can be redeemed before sending the email, so the visitor sees an error
+      // such as "already redeemed" now instead of after they sign in.
+      await this._giftService.service.getRedeemable({ token: giftToRedeem, memberStatus: null });
+    }
+
     const tokenData = {
       labels: req.body.labels,
       name: req.body.name,
@@ -1140,6 +1158,7 @@ module.exports = class RouterController {
       newsletters: await this._validateNewsletters(req.body?.newsletters),
       attribution: await this._memberAttributionService.getAttribution(req.body.urlHistory),
       ...(giftToken ? { giftToken } : {}),
+      ...(giftToRedeem ? { giftToRedeem } : {}),
     };
 
     return await this._sendEmailWithMagicLink({

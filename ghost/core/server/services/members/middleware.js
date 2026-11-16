@@ -128,6 +128,14 @@ const isSiteUrl = function isSiteUrl(referrer) {
   );
 };
 
+/**
+ * Returns true when the referrer is a gift redemption URL (`/#/portal/gift/redeem/<token>`). A
+ * visitor who signs in to redeem a gift is redirected back to that URL.
+ */
+const opensGiftRedemption = function opensGiftRedemption(referrer) {
+  return isSiteUrl(referrer) && /^#\/portal\/gift\/redeem\/[^/?#]+/.test(new URL(referrer).hash);
+};
+
 const getRedirectUrl = function getRedirectUrl({ action, referrer, searchParams, success }) {
   const redirectUrl = new URL(referrer);
 
@@ -498,8 +506,11 @@ const createSessionFromMagicLink = async function createSessionFromMagicLink(req
     }
 
     const action = req.query.action;
+    const signedUp = action === 'signup' || action === 'signup-paid' || action === 'subscribe';
 
-    if (action === 'signup' || action === 'signup-paid' || action === 'subscribe') {
+    // A member who signed up to redeem a gift is redirected back to the gift instead of the
+    // welcome page, because they haven't redeemed the gift yet.
+    if (signedUp && !opensGiftRedemption(req.query.r)) {
       let customRedirect = '';
       const mostRecentActiveSubscription = subscriptions
         .sort((a, b) => {

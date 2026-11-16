@@ -126,7 +126,9 @@ class StaffService {
       offerId: event.data.offerId,
     });
 
-    if (type === MemberCreatedEvent && member.status === 'free') {
+    // A member who signed up to redeem a gift is reported to staff when they redeem it, as a gift
+    // subscription, so the free signup email is skipped.
+    if (type === MemberCreatedEvent && member.status === 'free' && !event.data.redeemingGift) {
       let attribution;
       if (event.data?.attribution) {
         attribution = await this.memberAttributionService.fetchResource(event.data.attribution);

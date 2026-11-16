@@ -682,7 +682,10 @@ module.exports = class MemberRepository {
     const memberAddOptions = { ...(options || {}), withRelated };
     let member;
 
-    const isFreeSignup = !stripeCustomer && memberData.status === 'free';
+    // A member who signs up to redeem a gift gets the paid welcome email when they redeem it, so
+    // the free welcome email is skipped here.
+    const redeemingGift = Boolean(data.redeemingGift);
+    const isFreeSignup = !stripeCustomer && memberData.status === 'free' && !redeemingGift;
 
     if (isFreeSignup && WELCOME_EMAIL_SOURCES.includes(source)) {
       const runMemberCreation = async (transacting) => {
@@ -830,6 +833,7 @@ module.exports = class MemberRepository {
           batchId: options.batch_id,
           attribution: data.attribution,
           source,
+          redeemingGift,
         },
         eventData.created_at,
       ),

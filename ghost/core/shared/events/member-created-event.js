@@ -4,6 +4,7 @@
  * @prop {string} batchId
  * @prop {'import' | 'system' | 'api' | 'admin' | 'member'} source
  * @prop {import('../../server/services/member-attribution/attribution-builder').Attribution} [attribution] Attribution
+ * @prop {boolean} [redeemingGift] True when the member signed up to redeem a gift, which they redeem after signing in
  */
 
 module.exports = class MemberCreatedEvent {
