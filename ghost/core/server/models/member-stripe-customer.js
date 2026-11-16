@@ -1,8 +1,17 @@
 const ghostBookshelf = require('./base');
+const { fitToColumns } = require('./base/utils');
 
 const MemberStripeCustomer = ghostBookshelf.Model.extend(
   {
     tableName: 'members_stripe_customers',
+
+    onSaving: function onSaving() {
+      ghostBookshelf.Model.prototype.onSaving.apply(this, arguments);
+      // The name is a copy of the one Stripe holds, which can be longer than the column. Stored
+      // in full, it would fail the paid signup or webhook saving the customer, so the buyer would
+      // pay without becoming a paid member.
+      fitToColumns(this, ['name']);
+    },
 
     relationships: ['subscriptions'],
 

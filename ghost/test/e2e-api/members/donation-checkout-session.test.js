@@ -604,4 +604,28 @@ describe('Create Stripe Checkout Session for Donations', function () {
     assert.equal(donation.get('attribution_type'), 'post');
     assert.equal(donation.get('attribution_url'), url);
   });
+
+  it('Records a donation whose donor name and attribution are longer than Ghost stores', async function () {
+    // Stripe takes longer names than Ghost's name columns hold, and the visitor's browser sets the
+    // attribution with no length limit. The emoji straddles the cut, so the stored name shows it was
+    // cut by character, not split in half.
+    const email = 'long-name-donation@example.com';
+
+    await stripeMocker.sendWebhook({
+      type: 'checkout.session.completed',
+      data: {
+        object: {
+          mode: 'payment',
+          amount_total: 500,
+          currency: 'usd',
+          customer_details: { name: `${'x'.repeat(190)}🙂${'y'.repeat(60)}`, email },
+          metadata: { ghost_donation: true, utm_campaign: 'c'.repeat(250) },
+        },
+      },
+    });
+
+    const donation = await models.DonationPaymentEvent.findOne({ email }, { require: true });
+    assert.equal(donation.get('name'), `${'x'.repeat(190)}🙂`);
+    assert.equal(donation.get('utm_campaign'), 'c'.repeat(191));
+  });
 });

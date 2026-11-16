@@ -6,6 +6,7 @@ const _ = require('lodash');
 
 const ObjectId = require('bson-objectid').default;
 const errors = require('@tryghost/errors');
+const schema = require('../../data/schema');
 
 /**
  * Attach wrapper (please never call attach manual!)
@@ -93,5 +94,25 @@ const detach = function detach(Model, effectedModelId, relation, modelsToAttach,
     });
 };
 
+/**
+ * Cuts each of `columns` to its column's length, for text that comes from outside Ghost, such as a
+ * name Stripe holds, which can be longer than the column. A value too long to store would fail the
+ * save, and with it what Ghost was recording, such as a paid signup. The cut is by character
+ * rather than UTF-16 unit, as the column counts them, so no character is cut in half.
+ *
+ * @param {{tableName: string, get(column: string): unknown, set(column: string, value: string): unknown}} model
+ * @param {string[]} columns
+ */
+const fitToColumns = function fitToColumns(model, columns) {
+  const table = schema.tables[model.tableName];
+  for (const column of columns) {
+    const value = model.get(column);
+    if (typeof value === 'string') {
+      model.set(column, Array.from(value).slice(0, table[column].maxlength).join(''));
+    }
+  }
+};
+
 module.exports.attach = attach;
 module.exports.detach = detach;
+module.exports.fitToColumns = fitToColumns;

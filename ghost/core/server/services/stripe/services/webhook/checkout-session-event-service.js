@@ -8,8 +8,22 @@ const {
 const { CHECKOUT_PORT } = require('@tryghost/checkout');
 const { collectedFrom } = require('../checkout/completed-session');
 const { COLLECTION_FLAG } = require('../../../stripe-checkout-config/models');
+const { tables } = require('../../../../data/schema');
 /** @typedef {import('../../../../lib/member-signup-contexts').SignupContext} SignupContext */
 /** @typedef {import('../../tracking').CheckoutCompletionAttempt} CheckoutCompletionAttempt */
+
+/**
+ * A name the buyer gave a checkout, cut to fit the member's `name` column. Stripe takes longer
+ * names than the column holds, and a name too long to store would fail the webhook on every try,
+ * so the buyer would pay without becoming a member. It's cut by character rather than UTF-16 unit,
+ * as the column counts them, so no character is cut in half.
+ *
+ * @param {string | null | undefined} name
+ * @returns {string | null | undefined}
+ */
+function fittedName(name) {
+  return name ? Array.from(name).slice(0, tables.members.name.maxlength).join('') : name;
+}
 
 /**
  * The ids of the newsletters a checkout's metadata names, each once. Unreadable metadata names
@@ -492,7 +506,7 @@ module.exports = class CheckoutSessionEventService {
         customer,
         'subscriptions.data[0].default_payment_method.billing_details.name',
       );
-      const name = metadataName || payerName || null;
+      const name = fittedName(metadataName || payerName) || null;
 
       const memberData = { email: customer.email, name, attribution };
       if (metadataNewsletters) {
@@ -530,7 +544,7 @@ module.exports = class CheckoutSessionEventService {
       };
 
       if (canUpdateMember && payerName && !member.get('name')) {
-        await memberRepository.update({ name: payerName }, { id: member.get('id') });
+        await memberRepository.update({ name: fittedName(payerName) }, { id: member.get('id') });
       }
 
       await memberRepository.upsertCustomer({
